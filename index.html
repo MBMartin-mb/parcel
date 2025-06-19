@@ -1,0 +1,175 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vyhledávání detailů balíku</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #result, #error {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #result {
+            background-color: #e6ffed;
+            display: none;
+        }
+        #error {
+            background-color: #ffe6e6;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Vyhledávání detailů balíku</h1>
+    <label for="parcelNumber">Číslo balíku:</label>
+    <input type="text" id="parcelNumber" value="A000DBZ806-700-000-000000" placeholder="Zadejte číslo balíku">
+    <button onclick="fetchParcelDetails()">Načíst</button>
+    <div id="result">
+        <p><strong>Telefon příjemce:</strong> <span id="phone"></span></p>
+        <p><strong>Datum vložení:</strong> <span id="storedDate"></span></p>
+    </div>
+    <div id="error"></div>
+
+    <script>
+        // Základní URL pro API
+        const BASE_URL = 'https://parcelpointtest.cleverlance.com/parcelserver';
+
+        // Hlavičky s Basic Authentication pro uživatele marbusek:marbusek
+        const HEADERS = {
+            'Authorization': 'Basic bWFyYnVzZWs6bWFyYnVzZWs=' // Base64 zakódované "marbusek:marbusek"
+        };
+
+        // Načtení detailů balíku z API
+        async function fetchParcelDetails() {
+            const parcelNumber = document.getElementById('parcelNumber').value.trim();
+            const resultDiv = document.getElementById('result');
+            const errorDiv = document.getElementById('error');
+            const phoneSpan = document.getElementById('phone');
+            const storedDateSpan = document.getElementById('storedDate');
+
+            // Reset UI
+            resultDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            errorDiv.textContent = '';
+
+            if (!parcelNumber) {
+                errorDiv.style.display = 'block';
+                errorDiv.textContent = 'Prosím, zadejte číslo balíku.';
+                return;
+            }
+
+            try {
+                const url = `${BASE_URL}/api/parcelDetails/${encodeURIComponent(parcelNumber)}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: HEADERS,
+                    timeout: 5000 // 5sekundový timeout
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+
+                // Extrakce a formátování dat
+                const msisdn = data.notificationMsisdn || '—';
+                const storedDateTime = data.storedDateTime || '—';
+                let formattedDate = '—';
+                if (storedDateTime !== '—') {
+                    try {
+                        formattedDate = new Date(storedDateTime).toLocaleString('cs-CZ', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit'
+                        }).replace(',', '');
+                    } catch (e) {
+                        formattedDate = 'Neplatný formát data';
+                    }
+                }
+
+                // Zobrazení výsledků
+                phoneSpan.textContent = msisdn;
+                storedDateSpan.textContent = formattedDate;
+                resultDiv.style.display = 'block';
+            } catch (error) {
+                // Zpracování chyb (síť, timeout, 4xx/5xx)
+                errorDiv.style.display = 'block';
+                errorDiv.textContent = `Chyba: ${error.message || 'Nepodařilo se načíst detaily balíku.'}`;
+                if (error.message.includes('404')) {
+                    errorDiv.textContent = 'Balík nenalezen (404).';
+                } else if (error.message.includes('5')) {
+                    errorDiv.textContent = 'Chyba serveru. Zkuste to prosím znovu později.';
+                }
+            }
+        }
+    </script>
+</body>
+</html>
